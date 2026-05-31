@@ -1,0 +1,398 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Park Chat Room</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app chat-mode" id="appShell">
+    <header class="chat-header">
+      <button class="back-button" onclick="goBack()">← Back</button>
+
+      <div class="chat-title-area">
+        <h2 id="chatParkName">Park Name</h2>
+        <p id="chatWeather">Loading weather...</p>
+      </div>
+
+      <div class="chat-score-wrapper">
+        <div class="chat-score-box">
+          Park Weather Today
+          <span id="weatherScore">--/100</span>
+        </div>
+
+        <div class="chat-score-box">
+          Park Rating
+          <span id="chatScore">--/5</span>
+          <div id="chatStars"></div>
+          <button class="rate-button" onclick="goToRatingPage()">Rate Park</button>
+        </div>
+    </header>
+
+    <main class="chat-layout">
+      <section class="chat-left">
+        <div class="posts" id="posts"></div>
+        <div class="post-input">
+          <input id="postInput" type="text" placeholder="Write a post about this park..." />
+          <button onclick="addPost()">Send</button>
+        </div>
+      </section>
+
+      <aside class="park-image-panel">
+        <div class="park-image-card">
+          <img id="parkImage" src="" alt="Selected park image" />
+          <div class="park-image-text">
+            <h3 id="parkImageTitle">Park Image</h3>
+            <p id="parkImageDescription">A quick visual preview of the selected outdoor place.</p>
+          </div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <script src="./js/mockData.js"></script>
+  <script src="./js/mockUsers.js"></script>
+  <script src="./js/dataService.js"></script>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const parkName = decodeURIComponent(params.get("park") || "");
+
+    const currentUser =
+      JSON.parse(sessionStorage.getItem("currentUser")) || { id: 0, displayName: "Guest" };
+
+    let selectedPark = null;
+
+    // ── Per-user liked state (DynamoDB-backed) ───────────────────────────────
+    // likedSet is a Set of itemIds this user has liked, loaded from server on init.
+
+    let likedSet = new Set();
+
+    function _isLiked(id) { return likedSet.has(id); }
+    function _setLikedItem(id, liked) {
+      liked ? likedSet.add(id) : likedSet.delete(id);
+    }
+    function _applyLikedState(posts) {
+      (posts || []).forEach(post => {
+        post.liked = likedSet.has(post.id);
+        (post.comments || []).forEach(comment => {
+          comment.liked = likedSet.has(comment.id);
+          (comment.replies || []).forEach(reply => { reply.liked = likedSet.has(reply.id); });
+        });
+      });
+    }
+
+    async function init() {
+      const [park, likedIds] = await Promise.all([
+        DataService.getParkByName(parkName),
+        DataService.getUserLikes(currentUser.id)
+      ]);
+      selectedPark = park;
+      if (!selectedPark) {
+        document.getElementById("chatParkName").textContent = "Park not found";
+        return;
+      }
+      likedSet = new Set(likedIds);
+      _applyLikedState(selectedPark.posts);
+
+      document.getElementById("chatParkName").textContent = selectedPark.name;
+
+      const savedWeather = (() => {
+        try { return JSON.parse(sessionStorage.getItem("selectedParkWeather")); } catch { return null; }
+      })();
+      const weather = savedWeather || selectedPark.weather || null;
+      document.getElementById("chatWeather").textContent = weather
+        ? formatWeather(weather)
+        : "Weather unavailable";
+
+      const liveScore = weather ? calculateOutdoorScore(weather) : null;
+      document.getElementById("weatherScore").textContent =
+        liveScore != null ? `${liveScore}/100` : "--/100";
+
+      updateParkRating();
+
+      document.getElementById("parkImage").src = selectedPark.image;
+      document.getElementById("parkImageTitle").textContent = selectedPark.name;
+      document.getElementById("parkImageDescription").textContent = selectedPark.description;
+
+      renderPosts();
+    }
+
+    function goBack() {
+      window.location.href = "index.html";
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    function getAverageRating(park) {
+      if (!park.ratings || park.ratings.length === 0) return 0;
+      const total = park.ratings.reduce((sum, r) => sum + r.rating, 0);
+      return Number((total / park.ratings.length).toFixed(1));
+    }
+
+    function updateParkRating() {
+      const avg = getAverageRating(selectedPark);
+      document.getElementById("chatScore").textContent = avg > 0 ? `${avg}/5` : "--/5";
+      document.getElementById("chatStars").innerHTML = renderStarRating(avg);
+    }
+
+    function renderStarRating(rating) {
+      const pct = Math.max(0, Math.min(100, (rating / 5) * 100));
+      return `<span class="star-rating" style="--rating-width:${pct}%" aria-label="${rating.toFixed(1)} out of 5 stars"></span>`;
+    }
+
+    function getWeatherLabel(code) {
+      const labels = {
+        0:"Clear sky",1:"Mainly clear",2:"Partly cloudy",3:"Overcast",
+        45:"Fog",48:"Depositing rime fog",51:"Light drizzle",53:"Moderate drizzle",
+        55:"Dense drizzle",61:"Slight rain",63:"Moderate rain",65:"Heavy rain",
+        71:"Slight snow",73:"Moderate snow",75:"Heavy snow",80:"Slight rain showers",
+        81:"Moderate rain showers",82:"Violent rain showers",
+        95:"Thunderstorm",96:"Thunderstorm with hail",99:"Heavy thunderstorm with hail"
+      };
+      return labels[code] || "Unknown weather";
+    }
+
+    function formatWeather(w) {
+      return `${getWeatherLabel(w.weatherCode)} · ${w.temperature}°C · Rain ${w.precipitation} mm · Wind ${w.windSpeed} km/h`;
+    }
+
+    function calculateOutdoorScore(w) {
+      let score = 100;
+      const { temperature: t, precipitation: rain, windSpeed: wind, weatherCode: code } = w;
+      if (t < 0 || t > 35) score -= 40;
+      else if (t < 5 || t > 30) score -= 25;
+      else if (t < 10 || t > 27) score -= 12;
+      if (rain >= 5) score -= 45;
+      else if (rain >= 1) score -= 25;
+      else if (rain > 0) score -= 10;
+      if (wind >= 35) score -= 30;
+      else if (wind >= 22) score -= 15;
+      if (code >= 95) score -= 40;
+      else if (code >= 80) score -= 25;
+      else if (code >= 61) score -= 20;
+      else if (code >= 51) score -= 10;
+      else if (code >= 45) score -= 8;
+      return Math.max(0, Math.min(100, Math.round(score)));
+    }
+
+    // ── Render ───────────────────────────────────────────────────────────────
+
+    function renderPosts() {
+      const postsDiv = document.getElementById("posts");
+      const savedScroll = postsDiv.scrollTop;
+      postsDiv.innerHTML = "";
+
+      selectedPark.posts.forEach(postData => {
+        const post = document.createElement("div");
+        post.className = "post";
+
+        const visibleComments = postData.showAllComments
+          ? postData.comments
+          : postData.comments.slice(0, 2);
+
+        const commentsHtml = visibleComments.map(comment => {
+          const repliesHtml = comment.repliesVisible
+            ? comment.replies.map(reply => `
+                <div class="comment" style="margin-left:20px;">
+                  <strong>${reply.user}</strong>: ${reply.text}
+                  <div style="margin-top:6px;font-size:13px;">
+                    <span onclick="likeReply('${postData.id}','${comment.id}','${reply.id}')" style="cursor:pointer;">
+                      ${reply.liked ? "❤️" : "🤍"} ${reply.likes}
+                    </span>
+                  </div>
+                </div>
+              `).join("")
+            : "";
+
+          const repliesButton = comment.replies.length > 0
+            ? `<button onclick="toggleReplies('${postData.id}','${comment.id}')">
+                 ${comment.repliesVisible
+                   ? "Hide replies"
+                   : `View ${comment.replies.length} ${comment.replies.length === 1 ? "reply" : "replies"}`}
+               </button>`
+            : "";
+
+          return `
+            <div class="comment">
+              <strong>${comment.user}</strong>: ${comment.text}
+              <div style="margin-top:6px;font-size:13px;">
+                <span onclick="likeComment('${postData.id}','${comment.id}')" style="cursor:pointer;">
+                  ${comment.liked ? "❤️" : "🤍"}
+                </span>
+                ${comment.likes}
+                ${repliesButton}
+                <button onclick="toggleReplyInput('${postData.id}','${comment.id}')">Reply</button>
+              </div>
+              ${repliesHtml}
+              ${comment.showReplyInput ? `
+                <div class="comment-input">
+                  <input id="replyInput-${comment.id}" type="text" placeholder="Write a reply..." />
+                  <button onclick="addReply('${postData.id}','${comment.id}')">Send</button>
+                </div>
+              ` : ""}
+            </div>
+          `;
+        }).join("");
+
+        const hiddenCount = postData.comments.length - 2;
+        const showMoreHtml = !postData.showAllComments && hiddenCount > 0
+          ? `<div style="margin-top:8px;">
+               <button onclick="showAllComments('${postData.id}')">
+                 View ${hiddenCount} more comment${hiddenCount === 1 ? "" : "s"}
+               </button>
+             </div>`
+          : "";
+
+        const timestamp = postData.timestamp
+          ? new Date(postData.timestamp).toLocaleString()
+          : "Just now";
+
+        post.innerHTML = `
+          <div class="post-header">
+            <span class="post-user">${postData.user}</span>
+            <span>${timestamp}</span>
+          </div>
+          <p class="post-text">${postData.text}</p>
+          <div class="post-actions">
+            <span onclick="likePost('${postData.id}')" style="cursor:pointer;user-select:none;">
+              ${postData.liked ? "❤️" : "🤍"} ${postData.likes}
+            </span>
+            <span>💬 ${postData.comments.length} comment${postData.comments.length === 1 ? "" : "s"}</span>
+          </div>
+          <div class="comments">
+            ${commentsHtml}
+            ${showMoreHtml}
+            <div class="comment-input">
+              <input id="commentInput-${postData.id}" type="text" placeholder="Leave a comment..." />
+              <button onclick="addComment('${postData.id}')">Reply</button>
+            </div>
+          </div>
+        `;
+
+        postsDiv.appendChild(post);
+      });
+
+      postsDiv.scrollTop = savedScroll;
+    }
+
+    // ── Actions ───────────────────────────────────────────────────────────────
+    // All interactive actions use optimistic updates: update local state immediately,
+    // then fire API in the background — no full reload needed.
+
+    function likePost(postId) {
+      const post = selectedPark.posts.find(p => p.id === postId);
+      if (!post) return;
+      const newLiked = !post.liked;
+      const delta = newLiked ? 1 : -1;
+      post.liked = newLiked;
+      post.likes = Math.max(0, (post.likes || 0) + delta);
+      _setLikedItem(postId, newLiked);
+      renderPosts();
+      DataService.toggleLikePost(selectedPark.id, postId, delta, currentUser.id);
+    }
+
+    function likeComment(postId, commentId) {
+      const post = selectedPark.posts.find(p => p.id === postId);
+      const comment = post?.comments.find(c => c.id === commentId);
+      if (!comment) return;
+      const newLiked = !comment.liked;
+      const delta = newLiked ? 1 : -1;
+      comment.liked = newLiked;
+      comment.likes = Math.max(0, (comment.likes || 0) + delta);
+      _setLikedItem(commentId, newLiked);
+      renderPosts();
+      DataService.toggleLikeComment(selectedPark.id, postId, commentId, delta, currentUser.id);
+    }
+
+    function likeReply(postId, commentId, replyId) {
+      const post = selectedPark.posts.find(p => p.id === postId);
+      const comment = post?.comments.find(c => c.id === commentId);
+      const reply = comment?.replies.find(r => r.id === replyId);
+      if (!reply) return;
+      const newLiked = !reply.liked;
+      const delta = newLiked ? 1 : -1;
+      reply.liked = newLiked;
+      reply.likes = Math.max(0, (reply.likes || 0) + delta);
+      _setLikedItem(replyId, newLiked);
+      renderPosts();
+      DataService.toggleLikeReply(selectedPark.id, postId, commentId, replyId, delta, currentUser.id);
+    }
+
+    async function addPost() {
+      const input = document.getElementById("postInput");
+      const text = input.value.trim();
+      if (!text) return;
+      const newPost = await DataService.addPost(selectedPark.id, text, currentUser.displayName);
+      if (newPost) {
+        selectedPark.posts.unshift({ ...newPost, comments: newPost.comments || [] });
+      }
+      input.value = "";
+      renderPosts();
+      document.getElementById("posts").scrollTop = 0;
+    }
+
+    async function addComment(postId) {
+      const input = document.getElementById(`commentInput-${postId}`);
+      if (!input) return;
+      const text = input.value.trim();
+      if (!text) return;
+      const newComment = await DataService.addComment(selectedPark.id, postId, text, currentUser.displayName);
+      if (newComment) {
+        const post = selectedPark.posts.find(p => p.id === postId);
+        if (post) post.comments.push({ ...newComment, replies: [], repliesVisible: false });
+      }
+      renderPosts();
+    }
+
+    function toggleReplies(postId, commentId) {
+      const post = selectedPark.posts.find(p => p.id === postId);
+      const comment = post?.comments.find(c => c.id === commentId);
+      if (!comment) return;
+      comment.repliesVisible = !comment.repliesVisible;
+      renderPosts();
+      DataService.toggleRepliesVisible(selectedPark.id, postId, commentId);
+    }
+
+    function toggleReplyInput(postId, commentId) {
+      const post = selectedPark.posts.find(p => p.id === postId);
+      const comment = post?.comments.find(c => c.id === commentId);
+      if (!comment) return;
+      comment.showReplyInput = !comment.showReplyInput;
+      renderPosts();
+    }
+
+    async function addReply(postId, commentId) {
+      const input = document.getElementById(`replyInput-${commentId}`);
+      if (!input) return;
+      const text = input.value.trim();
+      if (!text) return;
+      const newReply = await DataService.addReply(selectedPark.id, postId, commentId, text, currentUser.displayName);
+      if (newReply) {
+        const post = selectedPark.posts.find(p => p.id === postId);
+        const comment = post?.comments.find(c => c.id === commentId);
+        if (comment) {
+          comment.replies.push(newReply);
+          comment.repliesVisible = true;
+          comment.showReplyInput = false;
+        }
+      }
+      renderPosts();
+    }
+
+    function showAllComments(postId) {
+      const post = selectedPark.posts.find(p => p.id === postId);
+      if (!post) return;
+      post.showAllComments = true;
+      renderPosts();
+      DataService.showAllComments(selectedPark.id, postId);
+    }
+
+    function goToRatingPage() {
+      window.location.href = `rating.html?park=${encodeURIComponent(selectedPark.name)}`;
+    }
+
+    init();
+  </script>
+</body>
+</html>

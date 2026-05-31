@@ -1,0 +1,396 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Smart Outdoor Planner</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app" id="appShell">
+    <header class="top-bar">
+      <div class="weather-info">
+        <h1 id="cityName">Seattle, WA</h1>
+        <p id="weatherText">Loading today's outdoor weather...</p>
+      </div>
+      <div class="score-box">
+        Today's Outdoor Suitability
+        <span id="mainScore">--/100</span>
+      </div>
+    </header>
+
+    <main class="main-content">
+      <div class="map-area">
+        <div class="location-controls">
+          <button class="location-button" onclick="getUserLocation()">Use My GPS Location</button>
+          <div class="radius-control">
+            <label for="radiusSlider">Search Radius: <span id="radiusValue">10</span> km</label>
+            <input type="range" id="radiusSlider" min="1" max="50" value="10" step="1"
+              oninput="updateRadius(this.value)" />
+          </div>
+        </div>
+        <div id="map"></div>
+      </div>
+
+      <aside class="side-panel">
+        <h2>Nearby Parks</h2>
+        <p id="parkCountInfo" class="park-count-info"></p>
+        <div id="parkList"></div>
+      </aside>
+    </main>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="./js/mockData.js"></script>
+  <script src="./js/mockUsers.js"></script>
+  <script src="./js/dataService.js"></script>
+  <script>
+    const currentUser = JSON.parse(sessionStorage.getItem("currentUser"));
+
+    if (!currentUser) {
+      window.location.href = "login.html";
+    }
+  </script>
+  <script>
+    let parks = [];
+    let userMarker, parkMarkers = [], map;
+    const DEFAULT_LAT = 47.6062, DEFAULT_LNG = -122.3321;
+    let userLat = DEFAULT_LAT, userLng = DEFAULT_LNG;
+    let searchRadius = 10;
+    let radiusCircle = null;
+
+    async function initMap() {
+      parks = await DataService.getParks();
+      map = L.map("map").setView([DEFAULT_LAT, DEFAULT_LNG], 12);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: "&copy; OpenStreetMap contributors"
+      }).addTo(map);
+
+      const userIcon = L.icon({
+        iconUrl: "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png",
+        shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+        iconSize: [25, 41], iconAnchor: [12, 41],
+        popupAnchor: [1, -34], shadowSize: [41, 41]
+      });
+
+      userMarker = L.marker([DEFAULT_LAT, DEFAULT_LNG], { icon: userIcon }).addTo(map);
+      userMarker.bindPopup("Default location: Seattle").openPopup();
+      updateRadiusCircle();
+
+      const savedState = (() => {
+        try { return JSON.parse(sessionStorage.getItem("mapState")); } catch { return null; }
+      })();
+
+      if (savedState) {
+        sessionStorage.removeItem("mapState");
+        if (savedState.userLat !== null) {
+          userLat = savedState.userLat;
+          userLng = savedState.userLng;
+          userMarker.setLatLng([userLat, userLng]);
+          userMarker.bindPopup("Your GPS Location").openPopup();
+          document.getElementById("cityName").textContent = "Your Current Location";
+        }
+        if (savedState.searchRadius) {
+          searchRadius = savedState.searchRadius;
+          document.getElementById("radiusSlider").value = searchRadius;
+          document.getElementById("radiusValue").textContent = searchRadius;
+        }
+        updateRadiusCircle();
+        map.setView([savedState.mapLat, savedState.mapLng], savedState.mapZoom);
+      }
+
+      renderParks();
+      loadAllWeather();
+    }
+
+    async function loadAllWeather() {
+      // Load home location weather from Locations table (updated daily by Lambda)
+      try {
+        const homeData = await DataService.getLocation("seattle-default");
+        if (homeData?.weather) {
+          const score = calculateOutdoorScore(homeData.weather);
+          document.getElementById("weatherText").textContent = formatWeather(homeData.weather);
+          document.getElementById("mainScore").textContent = `${score}/100`;
+        }
+      } catch {
+        // Fallback: fetch live from Open-Meteo if Locations table has no data yet
+        try {
+          const weather = await fetchWeather(DEFAULT_LAT, DEFAULT_LNG);
+          const score = calculateOutdoorScore(weather);
+          document.getElementById("weatherText").textContent = formatWeather(weather);
+          document.getElementById("mainScore").textContent = `${score}/100`;
+        } catch {
+          document.getElementById("weatherText").textContent = "Weather unavailable";
+        }
+      }
+
+      // Parks weather already stored in Parks table (weather, weatherScore fields)
+      // No need to call Open-Meteo for each park — just render with existing data
+      renderParks();
+    }
+
+    async function fetchWeather(lat, lng) {
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=temperature_2m,precipitation,weather_code,wind_speed_10m&timezone=auto`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("Weather request failed");
+      const data = await res.json();
+      return {
+        temperature:   data.current.temperature_2m,
+        precipitation: data.current.precipitation,
+        weatherCode:   data.current.weather_code,
+        windSpeed:     data.current.wind_speed_10m,
+        time:          data.current.time
+      };
+    }
+
+    function calculateOutdoorScore(w) {
+      let score = 100;
+      const { temperature: t, precipitation: rain, windSpeed: wind, weatherCode: code } = w;
+
+      if (t < 0 || t > 35) score -= 40;
+      else if (t < 5 || t > 30) score -= 25;
+      else if (t < 10 || t > 27) score -= 12;
+
+      if (rain >= 5) score -= 45;
+      else if (rain >= 1) score -= 25;
+      else if (rain > 0) score -= 10;
+
+      if (wind >= 35) score -= 30;
+      else if (wind >= 22) score -= 15;
+
+      if (code >= 95) score -= 40;
+      else if (code >= 80) score -= 25;
+      else if (code >= 61) score -= 20;
+      else if (code >= 51) score -= 10;
+      else if (code >= 45) score -= 8;
+
+      return Math.max(0, Math.min(100, Math.round(score)));
+    }
+
+    function scoreToRating(score) {
+      return Number(Math.max(0, Math.min(5, score / 20)).toFixed(1));
+    }
+
+    function renderStarRating(rating) {
+      const pct = Math.max(0, Math.min(100, (rating / 5) * 100));
+      return `<span class="star-rating" style="--rating-width:${pct}%" aria-label="${rating.toFixed(1)} out of 5 stars"></span>`;
+    }
+
+    function formatRating(score) {
+      return `${scoreToRating(score).toFixed(1)}/5`;
+    }
+
+    function getWeatherLabel(code) {
+      const labels = {
+        0:"Clear sky",1:"Mainly clear",2:"Partly cloudy",3:"Overcast",
+        45:"Fog",48:"Depositing rime fog",51:"Light drizzle",
+        53:"Moderate drizzle",55:"Dense drizzle",61:"Slight rain",
+        63:"Moderate rain",65:"Heavy rain",71:"Slight snow",
+        73:"Moderate snow",75:"Heavy snow",80:"Slight rain showers",
+        81:"Moderate rain showers",82:"Violent rain showers",
+        95:"Thunderstorm",96:"Thunderstorm with hail",99:"Heavy thunderstorm with hail"
+      };
+      return labels[code] || "Unknown weather";
+    }
+
+    function formatWeather(w) {
+      return `${getWeatherLabel(w.weatherCode)} · ${w.temperature}°C · Rain ${w.precipitation} mm · Wind ${w.windSpeed} km/h`;
+    }
+
+    function getAverageRating(park) {
+      if (!park.ratings || park.ratings.length === 0) {
+        return 0;
+      }
+
+      const total = park.ratings.reduce(
+        (sum, r) => sum + r.rating,
+        0
+      );
+
+      return Number((total / park.ratings.length).toFixed(1));
+    }
+
+    function getDistanceKm(lat1, lng1, lat2, lng2) {
+      const R = 6371;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLng = (lng2 - lng1) * Math.PI / 180;
+      const a = Math.sin(dLat / 2) ** 2 +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+        Math.sin(dLng / 2) ** 2;
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    function updateRadius(val) {
+      searchRadius = parseInt(val);
+      document.getElementById("radiusValue").textContent = searchRadius;
+      if (userLat !== null) {
+        updateRadiusCircle();
+        renderParks();
+      }
+    }
+
+    function updateRadiusCircle() {
+      if (radiusCircle) map.removeLayer(radiusCircle);
+      if (userLat === null) return;
+      radiusCircle = L.circle([userLat, userLng], {
+        radius: searchRadius * 1000,
+        color: "#3388ff",
+        fillColor: "#3388ff",
+        fillOpacity: 0.08,
+        weight: 2
+      }).addTo(map);
+    }
+
+    function renderParks() {
+      const parkList = document.getElementById("parkList");
+      parkList.innerHTML = "";
+      parkMarkers.forEach(m => map.removeLayer(m));
+      parkMarkers = [];
+
+      let displayParks = parks.map(park => {
+        const dist = userLat !== null
+          ? getDistanceKm(userLat, userLng, park.lat, park.lng)
+          : null;
+        return { ...park, distanceKm: dist };
+      });
+
+      if (userLat !== null) {
+        displayParks = displayParks.filter(p => p.distanceKm <= searchRadius);
+        displayParks.sort((a, b) => a.distanceKm - b.distanceKm);
+      }
+
+      const countInfo = document.getElementById("parkCountInfo");
+      if (userLat !== null) {
+        countInfo.textContent = `${displayParks.length} park${displayParks.length !== 1 ? "s" : ""} within ${searchRadius} km`;
+      } else {
+        countInfo.textContent = "";
+      }
+
+      if (displayParks.length === 0) {
+        parkList.innerHTML = `<p class="no-parks-msg">No parks found within ${searchRadius} km. Try increasing the radius.</p>`;
+        return;
+      }
+
+      displayParks.forEach(park => {
+        const weatherText = park.weather ? formatWeather(park.weather) : "Weather loading...";
+        const score = park.weatherScore != null
+          ? park.weatherScore
+          : (park.weather ? calculateOutdoorScore(park.weather) : null);
+        const scoreText = score != null ? `${score}/100` : "--/100";
+
+        const avgRating = getAverageRating(park);
+        const ratingText = avgRating > 0
+          ? `${avgRating}/5`
+          : "--/5";
+
+        const starsHtml = renderStarRating(avgRating);
+
+        const distanceLabel = park.distanceKm !== null
+          ? `${park.distanceKm < 1 ? (park.distanceKm * 1000).toFixed(0) + " m" : park.distanceKm.toFixed(1) + " km"} away`
+          : "";
+
+        const marker = L.marker([park.lat, park.lng]).addTo(map);
+        marker.bindPopup(`
+          <strong>${park.name}</strong><br>
+          ${distanceLabel ? `<em>${distanceLabel}</em><br>` : ""}
+          ${weatherText}<br>
+          Park Weather Today: ${scoreText}<br>
+          Park Rating: ${ratingText}<br>
+          ${starsHtml}<br>
+          <button onclick="goToChat('${encodeURIComponent(park.name)}')">
+            Open Chat
+          </button>
+        `);
+        marker.on("click", () => {
+          if (park.weather) {
+            document.getElementById("weatherText").textContent = formatWeather(park.weather);
+            document.getElementById("mainScore").textContent = scoreText;
+          }
+        });
+        parkMarkers.push(marker);
+
+        const card = document.createElement("div");
+        card.className = "park-card";
+        card.innerHTML = `
+          <h3>${park.name}</h3>
+          ${distanceLabel ? `<p class="park-distance">${distanceLabel}</p>` : ""}
+          <p>${weatherText}</p>
+          <p>Park Weather Today: ${scoreText}</p>
+          <p>Park Rating: ${ratingText}</p>
+          <div class="park-card-stars">${starsHtml}</div>
+        `;
+        card.onclick = () => goToChat(encodeURIComponent(park.name));
+        parkList.appendChild(card);
+      });
+    }
+
+    function goToChat(encodedName) {
+      const parkName   = decodeURIComponent(encodedName);
+      const targetPark = parks.find(p => p.name === parkName);
+      if (targetPark?.weather) {
+        sessionStorage.setItem("selectedParkWeather", JSON.stringify(targetPark.weather));
+      } else {
+        sessionStorage.removeItem("selectedParkWeather");
+      }
+      sessionStorage.setItem("mapState", JSON.stringify({
+        userLat,
+        userLng,
+        searchRadius,
+        mapLat: map.getCenter().lat,
+        mapLng: map.getCenter().lng,
+        mapZoom: map.getZoom()
+      }));
+      window.location.href = `chat.html?park=${encodedName}`;
+    }
+
+    function showLocationError(msg) {
+      const existing = document.getElementById("locationErrorMsg");
+      if (existing) existing.remove();
+      const el = document.createElement("div");
+      el.id = "locationErrorMsg";
+      el.className = "location-error-msg";
+      el.textContent = msg;
+      document.querySelector(".location-controls").appendChild(el);
+      setTimeout(() => el.remove(), 5000);
+    }
+
+    async function getUserLocation() {
+      if (!navigator.geolocation) {
+        showLocationError("Your browser does not support GPS.");
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(async pos => {
+        const { latitude: lat, longitude: lng } = pos.coords;
+        userLat = lat;
+        userLng = lng;
+        map.setView([lat, lng], 13);
+        userMarker.setLatLng([lat, lng]);
+        userMarker.bindPopup("Your GPS Location").openPopup();
+        document.getElementById("cityName").textContent = "Your Current Location";
+        document.getElementById("weatherText").textContent = "Loading your local weather...";
+        updateRadiusCircle();
+        renderParks();
+        try {
+          const weather = await fetchWeather(lat, lng);
+          const score = calculateOutdoorScore(weather);
+          document.getElementById("weatherText").textContent = formatWeather(weather);
+          document.getElementById("mainScore").textContent = `${score}/100`;
+        } catch (err) {
+          document.getElementById("weatherText").textContent =
+            `GPS: ${lat.toFixed(4)}, ${lng.toFixed(4)} · Weather failed`;
+        }
+      }, (err) => {
+        const msg = err.code === 1
+          ? "Location access denied. Please allow it in browser settings."
+          : "Unable to get your location. Please try again.";
+        showLocationError(msg);
+      });
+    }
+
+
+    initMap();
+  </script>
+</body>
+</html>
