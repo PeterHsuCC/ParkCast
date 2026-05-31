@@ -1,0 +1,45 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Login - Smart Outdoor Planner</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="login-card">
+    <h1>Smart Outdoor Planner</h1>
+    <p>Login to continue</p>
+
+    <input id="username" type="text" placeholder="Username" />
+    <input id="password" type="password" placeholder="Password" />
+
+    <button onclick="login()">Login</button>
+    <p id="loginError"></p>
+
+    <div class="demo-info">
+      Demo: peter / 123456
+    </div>
+  </div>
+
+  <script src="./js/mockUsers.js"></script>
+  <script src="./js/dataService.js"></script>
+  <script>
+    async function login() {
+      const username = document.getElementById("username").value.trim();
+      const password = document.getElementById("password").value.trim();
+      const error = document.getElementById("loginError");
+
+      const user = await DataService.login(username, password);
+
+      if (!user) {
+        error.textContent = "Invalid username or password.";
+        return;
+      }
+
+      sessionStorage.setItem("currentUser", JSON.stringify(user));
+      window.location.href = "index.html";
+    }
+  </script>
+</body>
+</html>

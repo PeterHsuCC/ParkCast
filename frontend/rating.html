@@ -1,0 +1,94 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Rate Park</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app chat-mode">
+    <header class="chat-header">
+      <button class="back-button" onclick="goBack()">← Back</button>
+      <div class="chat-title-area">
+        <h2 id="parkName">Rate Park</h2>
+        <p>Select your rating for this park.</p>
+      </div>
+    </header>
+
+    <main class="rating-page">
+      <div class="rating-card">
+        <h2 id="ratingTitle">Park Rating</h2>
+        <p id="averageRating">Average: --/5</p>
+
+        <div id="ratingStars" class="big-rating-stars"></div>
+
+        <button class="back-button" onclick="submitRating()">Submit Rating</button>
+      </div>
+    </main>
+  </div>
+
+  <script src="./js/mockData.js"></script>
+  <script src="./js/mockUsers.js"></script>
+  <script src="./js/dataService.js"></script>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const parkName = decodeURIComponent(params.get("park") || "");
+
+    const currentUser =
+      JSON.parse(sessionStorage.getItem("currentUser")) || { id: 0, displayName: "Guest" };
+
+    let selectedPark = null;
+    let selectedRating = 0;
+
+    async function init() {
+      selectedPark = await DataService.getParkByName(parkName);
+      if (!selectedPark) return;
+      document.getElementById("parkName").textContent = selectedPark.name;
+      document.getElementById("ratingTitle").textContent = `Rate ${selectedPark.name}`;
+      updateAverageRating();
+      renderRatingStars();
+    }
+
+    function getAverageRating(park) {
+      if (!park.ratings || park.ratings.length === 0) return 0;
+      const total = park.ratings.reduce((sum, r) => sum + r.rating, 0);
+      return Number((total / park.ratings.length).toFixed(1));
+    }
+
+    function updateAverageRating() {
+      const avg = getAverageRating(selectedPark);
+      document.getElementById("averageRating").textContent =
+        avg > 0 ? `Average: ${avg}/5` : "Average: --/5";
+    }
+
+    function renderRatingStars() {
+      let html = "";
+      for (let i = 1; i <= 5; i++) {
+        html += `<span onclick="selectRating(${i})">${i <= selectedRating ? "★" : "☆"}</span>`;
+      }
+      document.getElementById("ratingStars").innerHTML = html;
+    }
+
+    function selectRating(rating) {
+      selectedRating = rating;
+      renderRatingStars();
+    }
+
+    async function submitRating() {
+      if (selectedRating === 0) {
+        alert("Please select a rating first.");
+        return;
+      }
+      await DataService.submitRating(selectedPark.id, currentUser.id, selectedRating);
+      window.location.href = `chat.html?park=${encodeURIComponent(selectedPark.name)}`;
+    }
+
+    function goBack() {
+      window.location.href = `chat.html?park=${encodeURIComponent(selectedPark.name)}`;
+    }
+
+    init();
+  </script>
+</body>
+</html>
