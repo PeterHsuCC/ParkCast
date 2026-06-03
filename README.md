@@ -2,8 +2,6 @@
 
 A web app that recommends Seattle-area parks using real-time weather data, outdoor suitability scores, user ratings, and community posts.
 
-**Live API:** `https://wgt7bau8t2.execute-api.us-east-1.amazonaws.com/prod`
-
 ---
 
 ## Features
