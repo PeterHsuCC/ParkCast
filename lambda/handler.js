@@ -109,7 +109,7 @@ const headers = {
   "Content-Type": "application/json",
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "Content-Type",
-  "Access-Control-Allow-Methods": "GET,POST,PATCH,OPTIONS"
+  "Access-Control-Allow-Methods": "GET,POST,PATCH,DELETE,OPTIONS"
 };
 
 const res = (statusCode, body) => ({
@@ -415,6 +415,35 @@ exports.handler = async (event) => {
         Item: { parkId: params.id, userId: String(body.userId), rating: body.rating }
       }));
       return ok({ message: "Rating saved" });
+    }
+
+    // ── GET /users/{userId}/favorites ───────────────────────────────────────
+    if (method === "GET" && path.match(/^\/users\/[^/]+\/favorites$/)) {
+      const result = await db.send(new QueryCommand({
+        TableName: "Favorites",
+        KeyConditionExpression: "userId = :uid",
+        ExpressionAttributeValues: { ":uid": params.id }
+      }));
+      return ok(result.Items.map(item => item.parkId));
+    }
+
+    // ── POST /users/{userId}/favorites ──────────────────────────────────────
+    if (method === "POST" && path.match(/^\/users\/[^/]+\/favorites$/)) {
+      if (!body.parkId) return badReq("parkId required");
+      await db.send(new PutCommand({
+        TableName: "Favorites",
+        Item: { userId: params.id, parkId: body.parkId }
+      }));
+      return ok({ ok: true });
+    }
+
+    // ── DELETE /users/{userId}/favorites/{parkId} ────────────────────────────
+    if (method === "DELETE" && path.match(/^\/users\/[^/]+\/favorites\/[^/]+$/)) {
+      await db.send(new DeleteCommand({
+        TableName: "Favorites",
+        Key: { userId: params.id, parkId: params.postId }
+      }));
+      return ok({ ok: true });
     }
 
     // ── POST /auth/login ─────────────────────────────────────────────────────

@@ -20,10 +20,11 @@
       <div class="rating-card">
         <h2 id="ratingTitle">Park Rating</h2>
         <p id="averageRating">Average: --/5</p>
+        <p id="yourRating" style="font-size:13px;opacity:0.7;margin-top:2px;"></p>
 
         <div id="ratingStars" class="big-rating-stars"></div>
 
-        <button class="back-button" onclick="submitRating()">Submit Rating</button>
+        <button id="submitBtn" class="back-button" onclick="submitRating()">Submit Rating</button>
       </div>
     </main>
   </div>
@@ -40,26 +41,28 @@
 
     let selectedPark = null;
     let selectedRating = 0;
+    let currentAverage = 0;
 
     async function init() {
       selectedPark = await DataService.getParkByName(parkName);
       if (!selectedPark) return;
       document.getElementById("parkName").textContent = selectedPark.name;
       document.getElementById("ratingTitle").textContent = `Rate ${selectedPark.name}`;
+      const result = await DataService.getRatings(selectedPark.parkId || selectedPark.id);
+      currentAverage = result.average;
+      const previous = result.ratings.find(r => String(r.userId) === String(currentUser.id));
+      if (previous) {
+        selectedRating = previous.rating;
+        document.getElementById("yourRating").textContent = `Your Rating: ${previous.rating}/5`;
+        document.getElementById("submitBtn").textContent = "Change Rating";
+      }
       updateAverageRating();
       renderRatingStars();
     }
 
-    function getAverageRating(park) {
-      if (!park.ratings || park.ratings.length === 0) return 0;
-      const total = park.ratings.reduce((sum, r) => sum + r.rating, 0);
-      return Number((total / park.ratings.length).toFixed(1));
-    }
-
     function updateAverageRating() {
-      const avg = getAverageRating(selectedPark);
       document.getElementById("averageRating").textContent =
-        avg > 0 ? `Average: ${avg}/5` : "Average: --/5";
+        currentAverage > 0 ? `Average: ${currentAverage}/5` : "Average: --/5";
     }
 
     function renderRatingStars() {

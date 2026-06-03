@@ -203,6 +203,29 @@ const DataService = (() => {
 
   // ── Ratings ───────────────────────────────────────────────────────────────
 
+  async function getFavorites(userId) {
+    if (USE_API) return _fetch(`/users/${userId}/favorites`);
+    return [];
+  }
+
+  async function toggleFavorite(userId, parkId, isFavorite) {
+    if (USE_API) {
+      if (isFavorite) return _fetch(`/users/${userId}/favorites`, "POST", { parkId });
+      return _fetch(`/users/${userId}/favorites/${parkId}`, "DELETE");
+    }
+  }
+
+  async function getRatings(parkId) {
+    if (USE_API) return _fetch(`/parks/${parkId}/ratings`);
+    _init();
+    const park = _park(parkId);
+    const ratings = park?.ratings ?? [];
+    const avg = ratings.length
+      ? Number((ratings.reduce((s, r) => s + r.rating, 0) / ratings.length).toFixed(1))
+      : 0;
+    return { ratings, average: avg, count: ratings.length };
+  }
+
   async function submitRating(parkId, userId, rating) {
     if (USE_API) return _fetch(`/parks/${parkId}/ratings`, "POST", { userId, rating });
     _init();
@@ -233,10 +256,11 @@ const DataService = (() => {
     getParks, getPark, getParkByName, updateParkWeather,
     getLocation,
     getUserLikes,
+    getFavorites, toggleFavorite,
     addPost, toggleLikePost, showAllComments,
     addComment, toggleLikeComment, toggleRepliesVisible, toggleReplyInput,
     addReply, toggleLikeReply,
-    submitRating,
+    getRatings, submitRating,
     login
   };
 

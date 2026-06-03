@@ -15,6 +15,8 @@
         <h2 id="chatParkName">Park Name</h2>
         <p id="chatWeather">Loading weather...</p>
       </div>
+      <button id="favBtn" onclick="toggleFav()"
+        style="background:none;border:1px solid #fff;border-radius:20px;padding:4px 12px;cursor:pointer;font-size:14px;color:#fff;display:flex;align-items:center;gap:4px;">☆ Favorite</button>
 
       <div class="chat-score-wrapper">
         <div class="chat-score-box">
@@ -62,6 +64,7 @@
       JSON.parse(sessionStorage.getItem("currentUser")) || { id: 0, displayName: "Guest" };
 
     let selectedPark = null;
+    let isFavorited = false;
 
     // ── Per-user liked state (DynamoDB-backed) ───────────────────────────────
     // likedSet is a Set of itemIds this user has liked, loaded from server on init.
@@ -83,9 +86,10 @@
     }
 
     async function init() {
-      const [park, likedIds] = await Promise.all([
+      const [park, likedIds, favIds] = await Promise.all([
         DataService.getParkByName(parkName),
-        DataService.getUserLikes(currentUser.id)
+        DataService.getUserLikes(currentUser.id),
+        DataService.getFavorites(currentUser.id).catch(() => [])
       ]);
       selectedPark = park;
       if (!selectedPark) {
@@ -94,6 +98,9 @@
       }
       likedSet = new Set(likedIds);
       _applyLikedState(selectedPark.posts);
+      const parkId = String(selectedPark.parkId || selectedPark.id);
+      isFavorited = favIds.includes(parkId);
+      _updateFavBtn();
 
       document.getElementById("chatParkName").textContent = selectedPark.name;
 
@@ -109,7 +116,7 @@
       document.getElementById("weatherScore").textContent =
         liveScore != null ? `${liveScore}/100` : "--/100";
 
-      updateParkRating();
+      await updateParkRating();
 
       document.getElementById("parkImage").src = selectedPark.image;
       document.getElementById("parkImageTitle").textContent = selectedPark.name;
@@ -122,16 +129,27 @@
       window.location.href = "index.html";
     }
 
-    // ── Helpers ──────────────────────────────────────────────────────────────
-
-    function getAverageRating(park) {
-      if (!park.ratings || park.ratings.length === 0) return 0;
-      const total = park.ratings.reduce((sum, r) => sum + r.rating, 0);
-      return Number((total / park.ratings.length).toFixed(1));
+    function _updateFavBtn() {
+      const btn = document.getElementById("favBtn");
+      btn.textContent = isFavorited ? "⭐ Favorited" : "☆ Favorite";
+      btn.style.background   = isFavorited ? "#f5c518" : "none";
+      btn.style.borderColor  = isFavorited ? "#f5c518" : "#fff";
+      btn.style.color        = isFavorited ? "#000"    : "#fff";
     }
 
-    function updateParkRating() {
-      const avg = getAverageRating(selectedPark);
+    function toggleFav() {
+      isFavorited = !isFavorited;
+      _updateFavBtn();
+      const parkId = String(selectedPark.parkId || selectedPark.id);
+      DataService.toggleFavorite(currentUser.id, parkId, isFavorited);
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    async function updateParkRating() {
+      const parkId = String(selectedPark.parkId || selectedPark.id);
+      const result = await DataService.getRatings(parkId);
+      const avg = result.average;
       document.getElementById("chatScore").textContent = avg > 0 ? `${avg}/5` : "--/5";
       document.getElementById("chatStars").innerHTML = renderStarRating(avg);
     }

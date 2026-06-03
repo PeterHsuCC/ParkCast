@@ -34,7 +34,13 @@
       </div>
 
       <aside class="side-panel">
-        <h2>Nearby Parks</h2>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+          <h2 style="margin:0;">Nearby Parks</h2>
+          <button id="favFilterBtn" onclick="toggleFavFilter()"
+            style="background:none;border:1px solid #fff;border-radius:20px;padding:4px 12px;cursor:pointer;font-size:13px;color:#fff;">
+            ☆ Show Favorites
+          </button>
+        </div>
         <p id="parkCountInfo" class="park-count-info"></p>
         <div id="parkList"></div>
       </aside>
@@ -59,9 +65,22 @@
     let userLat = DEFAULT_LAT, userLng = DEFAULT_LNG;
     let searchRadius = 10;
     let radiusCircle = null;
+    let favSet = new Set();
+    let showFavOnly = false;
+    let ratingsMap = {};
 
     async function initMap() {
-      parks = await DataService.getParks();
+      [parks] = await Promise.all([
+        DataService.getParks(),
+        DataService.getFavorites(currentUser.id)
+          .then(ids => { favSet = new Set(ids); })
+          .catch(() => {})
+      ]);
+      await Promise.all(parks.map(p =>
+        DataService.getRatings(String(p.parkId || p.id))
+          .then(r => { ratingsMap[String(p.parkId || p.id)] = r.average; })
+          .catch(() => {})
+      ));
       map = L.map("map").setView([DEFAULT_LAT, DEFAULT_LNG], 12);
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         maxZoom: 19,
@@ -261,6 +280,10 @@
         displayParks.sort((a, b) => a.distanceKm - b.distanceKm);
       }
 
+      if (showFavOnly) {
+        displayParks = displayParks.filter(p => favSet.has(String(p.parkId || p.id)));
+      }
+
       const countInfo = document.getElementById("parkCountInfo");
       if (userLat !== null) {
         countInfo.textContent = `${displayParks.length} park${displayParks.length !== 1 ? "s" : ""} within ${searchRadius} km`;
@@ -280,7 +303,7 @@
           : (park.weather ? calculateOutdoorScore(park.weather) : null);
         const scoreText = score != null ? `${score}/100` : "--/100";
 
-        const avgRating = getAverageRating(park);
+        const avgRating = ratingsMap[String(park.parkId || park.id)] ?? 0;
         const ratingText = avgRating > 0
           ? `${avgRating}/5`
           : "--/5";
@@ -311,9 +334,17 @@
         });
         parkMarkers.push(marker);
 
+        const parkId = String(park.parkId || park.id);
+        const isFav = favSet.has(parkId);
+
         const card = document.createElement("div");
         card.className = "park-card";
+        card.style.position = "relative";
         card.innerHTML = `
+          <button class="fav-btn" id="fav-${parkId}" onclick="toggleFav(event,'${parkId}')"
+            style="position:absolute;top:8px;right:8px;background:none;border:none;font-size:20px;cursor:pointer;line-height:1;">
+            ${isFav ? "⭐" : "☆"}
+          </button>
           <h3>${park.name}</h3>
           ${distanceLabel ? `<p class="park-distance">${distanceLabel}</p>` : ""}
           <p>${weatherText}</p>
@@ -324,6 +355,25 @@
         card.onclick = () => goToChat(encodeURIComponent(park.name));
         parkList.appendChild(card);
       });
+    }
+
+    function toggleFavFilter() {
+      showFavOnly = !showFavOnly;
+      const btn = document.getElementById("favFilterBtn");
+      btn.textContent = showFavOnly ? "⭐ Show Favorites" : "☆ Show Favorites";
+      btn.style.background = showFavOnly ? "#f5c518" : "none";
+      btn.style.borderColor = showFavOnly ? "#f5c518" : "#fff";
+      btn.style.color = showFavOnly ? "#000" : "#fff";
+      renderParks();
+    }
+
+    function toggleFav(event, parkId) {
+      event.stopPropagation();
+      const newFav = !favSet.has(parkId);
+      newFav ? favSet.add(parkId) : favSet.delete(parkId);
+      const btn = document.getElementById(`fav-${parkId}`);
+      if (btn) btn.textContent = newFav ? "⭐" : "☆";
+      DataService.toggleFavorite(currentUser.id, parkId, newFav);
     }
 
     function goToChat(encodedName) {
