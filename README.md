@@ -132,4 +132,4 @@ Final score is clamped to `[0, 100]`.
 ## Course Info
 
 **CPSC 5110 — Fundamentals of Software Engineering**  
-Project: SmartOutdoorPlanner / ParkCast
+Project: ParkCast

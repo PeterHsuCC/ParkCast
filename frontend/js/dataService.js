@@ -1,5 +1,5 @@
 /**
- * DataService — single data-access layer for Smart Outdoor Planner.
+ * DataService — single data-access layer for ParkCast.
  *
  * ┌─────────────────────────────────────────────────────┐
  * │  USE_API = false  →  mock data (no server needed)   │

@@ -1,5 +1,5 @@
 /**
- * handler.js — Single Lambda function for Smart Outdoor Planner API
+ * handler.js — Single Lambda function for ParkCast API
  * Handles all routes, triggered by API Gateway (HTTP API or REST API)
  */
 

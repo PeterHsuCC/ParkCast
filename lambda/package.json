@@ -1,5 +1,5 @@
 {
-  "name": "smart-outdoor-planner-api",
+  "name": "parkcast-api",
   "version": "1.0.0",
   "scripts": {
     "start": "node server.js",
