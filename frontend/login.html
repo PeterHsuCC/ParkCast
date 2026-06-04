@@ -15,7 +15,7 @@
     <input id="password" type="password" placeholder="Password" />
 
     <button onclick="login()">Login</button>
-    <p id="loginError"></p>
+    <p id="loginError" style="color:#ff6b6b;font-size:14px;min-height:20px;"></p>
 
     <div class="demo-info">
       Demo: peter / 123456
@@ -29,16 +29,24 @@
       const username = document.getElementById("username").value.trim();
       const password = document.getElementById("password").value.trim();
       const error = document.getElementById("loginError");
+      error.textContent = "";
 
-      const user = await DataService.login(username, password);
-
-      if (!user) {
-        error.textContent = "Invalid username or password.";
+      if (!username || !password) {
+        error.textContent = "Please enter username and password.";
         return;
       }
 
-      sessionStorage.setItem("currentUser", JSON.stringify(user));
-      window.location.href = "index.html";
+      try {
+        const user = await DataService.login(username, password);
+        if (!user) {
+          error.textContent = "Invalid username or password.";
+          return;
+        }
+        sessionStorage.setItem("currentUser", JSON.stringify(user));
+        window.location.href = "index.html";
+      } catch {
+        error.textContent = "Invalid username or password.";
+      }
     }
   </script>
 </body>
