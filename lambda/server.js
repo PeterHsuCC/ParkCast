@@ -133,6 +133,16 @@ app.patch("/parks/:id/posts/:postId/comments/:commentId/replies/:replyId/like", 
 
 // ── Ratings ───────────────────────────────────────────────────────────────────
 
+app.get("/parks/:id/ratings", (req, res) => {
+  const park = parks.find(p => p.id === req.params.id);
+  if (!park) return res.status(404).json({ error: "Park not found" });
+  const ratings = park.ratings ?? [];
+  const avg = ratings.length
+    ? Number((ratings.reduce((s, r) => s + r.rating, 0) / ratings.length).toFixed(1))
+    : 0;
+  res.json({ ratings, average: avg, count: ratings.length });
+});
+
 app.post("/parks/:id/ratings", (req, res) => {
   const park = parks.find(p => p.id === req.params.id);
   if (!park) return res.status(404).json({ error: "Park not found" });
